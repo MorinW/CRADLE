@@ -13,14 +13,9 @@ class MaskedLinear(nn.Linear):
     """ same as Linear except has a configurable mask on the weights """
     
     def __init__(self, n, in_features, out_features, self_connection=True, bias=True):
-        '''n: 自旋个数,
-           n*in: 总的输入个数,
-           n*out: 总的输出个数,
-         '''
-        super(MaskedLinear, self).__init__(n * in_features, n * out_features, bias)
-        #定义一个名为mask个的buffer     
+        super(MaskedLinear, self).__init__(n * in_features, n * out_features, bias)    
         if self_connection:
-            self.register_buffer('mask', torch.tril(torch.ones(n, n)))#注意 pytorch中是用行向量乘W.T定义的线性运算
+            self.register_buffer('mask', torch.tril(torch.ones(n, n)))
         else:
             self.register_buffer('mask', torch.tril(torch.ones(n, n), diagonal=-1))
         self.mask = torch.cat([self.mask] * in_features, dim=1)
@@ -44,10 +39,6 @@ class ResBlock(nn.Module):
 
 class CRADLE(nn.Module):
     def __init__(self, n, depth, width, activator='tanh', residual=False):
-        '''
-            n: 自旋个数，为网络的输入输出神经元个数
-            depth: 网络深度
-        '''
         super(CRADLE, self).__init__()
         self.n = n
         self.depth = depth
