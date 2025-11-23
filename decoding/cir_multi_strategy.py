@@ -118,7 +118,6 @@ USE_R_FEATURE = False
 # If True: input = [syndrome, r_feature, logical], where r_feature = r / 10.0
 # If False: input = [padded_syndrome, logical]. The model must infer r implicitly.
 
-# [新增] 1. 从 args 获取 shot 类型
 SHOT_TYPE = getattr(args, 'shot_type', 'odd_for_even')
 
 def forward(n_s, m, van, syndrome, device, dtype, k=1):
@@ -158,7 +157,6 @@ def get_r_for_epoch(epoch, strategy, r_values, warmup_epochs):
     else:
         raise ValueError(f"Unknown training strategy: {strategy}. Choose from: 'random', 'round_robin', 'curriculum'")
 
-# [修改] 2. 更新 print_strategy_info 函数定义，使其接受 shot_type
 def print_strategy_info(strategy, warmup_epochs, total_epochs, r_values, use_r_feature, shot_type):
     """
     Pretty-print the training configuration for clarity in logs.
@@ -169,7 +167,7 @@ def print_strategy_info(strategy, warmup_epochs, total_epochs, r_values, use_r_f
     print(f"Strategy : {strategy.upper()}")
     print(f"R Feature: {'ENABLED' if use_r_feature else 'DISABLED'}")
     print(f"Round-PE : {'ENABLED' if USE_ROUND_PE else 'DISABLED'}")
-    # [新增] 打印 SHOT_TYPE
+
     print(f"Shot Type: {shot_type.upper()} (DEM path & model name)")
     print("-" * 70)
     if strategy == 'random':
@@ -223,7 +221,6 @@ if __name__ == '__main__':
         path_s   = f'/ssd/userhome/maolin/qec/data/surface_code_b{basis}_d{d}_r{r_str}_center_{center}/detection_events.b8'
         path_l   = f'/ssd/userhome/maolin/qec/data/surface_code_b{basis}_d{d}_r{r_str}_center_{center}/obs_flips_actual.01'
         
-        # [修改] 3. 使用 SHOT_TYPE 动态构建 DEM 文件名和路径
         dem_filename = f"pij_from_{SHOT_TYPE}.dem"
         path_dem = f'/ssd/userhome/maolin/qec/data/surface_code_b{basis}_d{d}_r{r_str}_center_{center}/{dem_filename}'
       
@@ -304,7 +301,6 @@ if __name__ == '__main__':
     GPU_ID = getattr(args, 'gpu_id', 0)
 
     if torch.cuda.is_available():
-        # 检查指定的 GPU ID 是否有效
         if GPU_ID >= torch.cuda.device_count():
             print(f"警告: GPU ID {GPU_ID} 无效。系统共找到 {torch.cuda.device_count()} 块GPU。将自动使用 cuda:0。")
             device = 'cuda:0'
@@ -315,8 +311,7 @@ if __name__ == '__main__':
     
     dtype = torch.float32
     
-    print(f"*** 选定设备: {device} ***") # 增加一个明确的打印，确认设备
-    # [修改] 4. 更新对 print_strategy_info 的调用，传入 SHOT_TYPE
+    print(f"*** {device} ***")
     print_strategy_info(TRAINING_STRATEGY, CURRICULUM_WARMUP_EPOCHS, epoch, r_values, USE_R_FEATURE, SHOT_TYPE)
 
     if USE_ROUND_PE and round_pe_projector is not None:
@@ -353,20 +348,16 @@ if __name__ == '__main__':
         
         s_syndromes = torch.clamp(s_syndromes, 0.0, 1.0)
         
-        # [关键修改] 无论何种情况，都先对 s_syndromes 进行填充
         pad_len = max_syndrome_size - s_syndromes.size(1)
         if pad_len > 0:
             s_syndromes_padded = torch.hstack([s_syndromes, torch.zeros(batch, pad_len, device=device, dtype=dtype)])
         else:
             s_syndromes_padded = s_syndromes
         
-        # 现在基于填充后的 s_syndromes_padded 来构建最终输入 s
         if USE_R_FEATURE:
             s_r_features = torch.full((batch, 1), r / 10.0, device=device, dtype=dtype)
-            # 使用 s_syndromes_padded 而不是 s_syndromes
             s = torch.hstack((s_syndromes_padded, s_r_features, s_logicals))
         else:
-            # 这个分支的逻辑本身是正确的，它已经使用了填充后的 s_syndromes_padded
             s = torch.hstack((s_syndromes_padded, s_logicals))
 
         logp = van.log_prob((s * 2 - 1))
@@ -383,23 +374,18 @@ if __name__ == '__main__':
             test_r = r_values[torch.randint(0, len(r_values), (1,)).item()]
             test_logicals = all_data[test_r]['logicals']
         
-            # --- [关键BUG修复] ---
-            # 无论 USE_R_FEATURE 是真是假，我们都需要一个被正确填充的综合征
-            # 来作为模型的输入条件 (condition)
-            
-            # 1. 获取原始（未填充）的综合征
+
             raw_test_syndromes = all_data[test_r]['syndromes']
             n_test = min(50000, raw_test_syndromes.size(0))
             raw_test_syndromes = raw_test_syndromes[:n_test]
         
-            # 2. 对其进行填充
             pad_len = max_syndrome_size - raw_test_syndromes.size(1)
             if pad_len > 0:
                 padded_test_syndromes = torch.hstack([raw_test_syndromes, torch.zeros(n_test, pad_len, device=device, dtype=dtype)])
             else:
                 padded_test_syndromes = raw_test_syndromes
                 
-            # 3. 根据 USE_R_FEATURE 构建最终的输入条件
+          
             syndrome_condition_for_fwd = None
             if USE_R_FEATURE:
                 r_feature_tensor = torch.full((n_test, 1), test_r / 10.0, device=device, dtype=dtype)
@@ -407,11 +393,10 @@ if __name__ == '__main__':
             else:
                 syndrome_condition_for_fwd = padded_test_syndromes
         
-            # 4. 调用 forward 函数进行评估
+    
             lconf = forward(n_s=n_test, m=ni - 1, van=van,
                             syndrome=syndrome_condition_for_fwd,
                             device=device, dtype=dtype, k=1/2)
-            # --- [BUG修复结束] ---
             
             logical_error_rate = torch.abs(test_logicals[:n_test] - lconf).sum() / n_test
 
@@ -426,12 +411,9 @@ if __name__ == '__main__':
 
 # ---------------- Save model ----------------
     feature_suffix = "_with_r_feat" if USE_R_FEATURE else "_no_r_feat"
-    # [修改] 5. 使用 SHOT_TYPE 动态设置 shot_suffix
     shot_suffix = f"_{SHOT_TYPE}"
     pe_suffix = "_roundPE" if USE_ROUND_PE else "_noPE"
     
-    # [关键修改] 在模型名称中加入 basis (Z或X) 和 d (distance)
-    # 这两个变量 (basis, d) 都是在脚本顶部定义的
     model_name = f'b{basis}_d{d}_c{center}_multi_r_{TRAINING_STRATEGY}{feature_suffix}{pe_suffix}{shot_suffix}.pt'
     
     save_path = abspath(dirname(__file__)) + f'/net/cir/{model_name}'
@@ -440,11 +422,9 @@ if __name__ == '__main__':
     torch.save(van, save_path)
 
     print("\nTraining completed!")
-    # [修改] 打印更完整的信息
     print(f"Model saved to: {save_path}")
     print(f"Basis: {basis}, d={d}, center={center}")
     print(f"Strategy used: {TRAINING_STRATEGY}")
     print(f"R feature: {'ENABLED' if USE_R_FEATURE else 'DISABLED'}")
     print(f"Round-PE : {'ENABLED' if USE_ROUND_PE else 'DISABLED'}")
-    # [新增] 打印 SHOT_TYPE
     print(f"Shot Type: {SHOT_TYPE.upper()}")
