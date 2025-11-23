@@ -7,7 +7,6 @@ from tqdm import tqdm
 from os.path import abspath, dirname
 from typing import Optional
 
-# --- 关键路径设置 (和训练脚本保持一致) ---
 CURRENT_DIR = abspath(dirname(__file__))
 QEC_DIR = dirname(CURRENT_DIR)
 PARENT_DIR = dirname(QEC_DIR)
@@ -17,24 +16,14 @@ sys.path.append(PARENT_DIR)
 from module import CRADLE, Data
 
 basis, d = 'Z', 3
-center = '5_3' # [修改] 必须和训练脚本的 '5_7' 保持一致
-# [关键适配] 定义评估时要测试的所有 r 值
-R_EVAL_VALUES = [3, 5, 7, 9, 11, 13] # [确认] 必须包含训练时的所有 r
-DATA_BASE_PATH = "/ssd/userhome/maolin/qec/data"
-# --- [关键适配] 核心维度，必须与你的训练脚本完全一致 ---
-# [修改] 这个值必须是训练脚本中 r_values=[3...13] (d=3, center=5_7) 所产生的
-# 最大的 'max_syndrome_size'。
-# 如果 104 是 r=13 时的长度，那它就是对的。如果不是，请改成训练时打印的 'Max syndrome size'。
-GLOBAL_MAX_SYNDROME_SIZE = 104 # [确认] 必须和训练脚本的 'Max syndrome size' 一致
-
-# --- RPE 模块的超参数 (为了完整性保留，但当前模型未使用) ---
+center = '5_3'
+R_EVAL_VALUES = [3, 5, 7, 9, 11, 13] 
+DATA_BASE_PATH = "/ssd/userhome/name/qec/data"
+GLOBAL_MAX_SYNDROME_SIZE = 104 
 ROUND_PE_DIM        = 16
-ROUND_PE_MAX_ROUNDS = 16 # 与训练脚本保持一致
+ROUND_PE_MAX_ROUNDS = 16 
 ROUND_PE_ALPHA_INIT = 1e-2
 
-# ------------------------------------------------------------
-# Round Positional Encoding (RPE) — 从训练/评估脚本复制而来
-# ------------------------------------------------------------
 class RoundPositionalProjector(nn.Module):
     def __init__(self, num_detectors: int, max_rounds: int, dim: int = 16, alpha_init: float = 1e-2):
         super().__init__()
@@ -87,9 +76,6 @@ class RoundPositionalProjector(nn.Module):
                 outs.append(out_b.unsqueeze(0))
             return torch.cat(outs, dim=0)
 
-# ------------------------------------------------------------
-# 辅助函数
-# ------------------------------------------------------------
 def maybe_apply_round_pe(syndromes: torch.Tensor, r: int,
                          projector: Optional[RoundPositionalProjector],
                          device, dtype):
@@ -203,19 +189,15 @@ def main(args):
     dtype = torch.float32
     
     feature_suffix = "_with_r_feat" if args.r_feature else "_no_r_feat"
-    # [修改] 1. 使用 args.shot_type
-    # [修改] 2. 确保它生成和训练时一样的后缀 (例如 "_odd_for_even")
     shot_suffix = f"_{args.shot_type}"
     pe_suffix = "_roundPE" if args.round_pe else "_noPE"
 
-    # [修改] 3. 添加 b{basis} 前缀，以匹配训练脚本的保存名
-    # (basis 和 d 是在脚本顶部定义的全局变量)
     model_name = f'b{basis}_d{d}_c{center}_multi_r_{args.strategy}{feature_suffix}{pe_suffix}{shot_suffix}.pt'
 
     save_dir = abspath(dirname(__file__)) + '/net/cir/'
     model_path = save_dir + model_name
     if not os.path.exists(model_path):
-        print(f"错误: 找不到模型文件! 路径: {model_path}")
+        print(f"Error: Model file not found! Path: {model_path}")
         sys.exit(1)
 
     print("\nDetermining model dimensions based on training script configuration...")
@@ -234,7 +216,7 @@ def main(args):
     round_pe_projector = None
     if args.round_pe:
         if detected_D is None:
-            print("错误: --round_pe=True, 但无法检测到 num_detectors (D).")
+            print("Error: --round_pe=True, num_detectors (D).")
             sys.exit(1)
         round_pe_projector = RoundPositionalProjector(
             num_detectors=detected_D, max_rounds=ROUND_PE_MAX_ROUNDS,
@@ -250,16 +232,16 @@ def main(args):
         van.to(device).to(dtype)
         van.eval()
         print("Model loaded successfully.")
-        
         if van.n != ni:
-            print(f"!!! 维度不匹配警告 !!!")
-            print(f"  模型 'van.n' (加载的): {van.n}")
-            print(f"  脚本 'ni' (计算的): {ni}")
-            print(f"  请确保 GLOBAL_MAX_SYNDROME_SIZE ({GLOBAL_MAX_SYNDROME_SIZE}) 与训练时一致。")
-        
+            print(f"!!! Dimension Mismatch Warning !!!")
+            print(f"  Model 'van.n' (loaded): {van.n}")
+            print(f"  Script 'ni' (calculated): {ni}")
+            print(f"  Please ensure GLOBAL_MAX_SYNDROME_SIZE ({GLOBAL_MAX_SYNDROME_SIZE}) matches the training configuration.")
+
     except Exception as e:
-        print(f"加载模型失败: {e}")
+        print(f"Failed to load model: {e}")
         sys.exit(1)
+        
 
     print("\n" + "="*70)
     print("--- STARTING FINAL EVALUATION ---")
@@ -304,18 +286,10 @@ def main(args):
             all_logical_error_rates[r] = ler_cradle.item()
             
             benchmark_results = {}
-            if 'logicals_pre_TN' in all_data[r]:
-                logicals_tn = all_data[r]['logicals_pre_TN'].to(device).to(dtype)
-                ler_tn = abs(test_logicals_truth - logicals_tn).sum() / n_test
-                benchmark_results['TN'] = ler_tn.item()
             if 'logicals_pre_MWPM' in all_data[r]:
                 logicals_mwpm = all_data[r]['logicals_pre_MWPM'].to(device).to(dtype)
                 ler_mwpm = abs(test_logicals_truth - logicals_mwpm).sum() / n_test
                 benchmark_results['MWPM'] = ler_mwpm.item()
-            if 'logicals_pre_BM' in all_data[r]:
-                logicals_bm = all_data[r]['logicals_pre_BM'].to(device).to(dtype)
-                ler_bm = abs(test_logicals_truth - logicals_bm).sum() / n_test
-                benchmark_results['BM'] = ler_bm.item()
             if 'logicals_pre_CM' in all_data[r]:
                 logicals_cm = all_data[r]['logicals_pre_CM'].to(device).to(dtype)
                 ler_cm = abs(test_logicals_truth - logicals_cm).sum() / n_test
@@ -340,8 +314,6 @@ def main(args):
             samples_str = f"{all_data[r]['logicals'].size(0):<7d}"
             bench_lers = all_benchmark_lers.get(r, {})
             ler_mwpm_str = f"{bench_lers.get('MWPM', float('nan')):.8f}"
-            ler_tn_str = f"{bench_lers.get('TN', float('nan')):.8f}"
-            ler_bm_str = f"{bench_lers.get('BM', float('nan')):.8f}"
             ler_cm_str = f"{bench_lers.get('CM', float('nan')):.8f}"
             print(f"  {r:<3} | {samples_str} | {ler_cradle_str:<10} | {ler_mwpm_str:<10} | {ler_tn_str:<10} | {ler_bm_str:<10} | {ler_cm_str:<10}")
         else:
@@ -356,7 +328,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Evaluate a pre-trained CRADLE QEC model.")
 
     parser.add_argument('--strategy', type=str, default='curriculum')
-    # [修改] 使用 '--shot_type' 并匹配训练脚本的 'args.py'
     parser.add_argument('--shot_type', type=str, default='odd_for_even', 
                         choices=['odd_for_even', 'even_for_odd'],
                         help="Must match the --shot_type used during training.")
